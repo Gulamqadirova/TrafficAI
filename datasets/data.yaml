@@ -1,0 +1,8 @@
+path: /Users/baxronagulamqadirova/TrafficAI_Submission/code/datasets
+train: train/images
+val: train/images
+
+nc: 2
+names:
+  0: car
+  1: person

@@ -1,0 +1,21 @@
+# TPBI Platform - Python dependencies
+numpy>=1.26
+pandas>=2.0
+scikit-learn>=1.3
+matplotlib>=3.7
+openpyxl>=3.1
+opencv-python>=4.8
+
+# Optional production object detection (auto-fallback to OpenCV if absent)
+# ultralytics>=8.0
+# torch>=2.0
+
+# YouTube real-time detection uchun (youtube_detect.py)
+yt-dlp>=2024.1.1
+ultralytics>=8.0
+
+# Fine-tuning (train.py) - ultralytics yetarli (yuqorida bor)
+# torch avtomatik o'rnatiladi ultralytics bilan
+
+# Dashboard / UI (dashboard.py)
+streamlit>=1.30
