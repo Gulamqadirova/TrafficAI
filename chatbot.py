@@ -1,207 +1,304 @@
 from __future__ import annotations
-import re
+import os
+import json
 from typing import Optional
 
 import database
 
 
+#  Claude API sozlash
+def _get_api_key() -> Optional[str]:
+    """API kalitini Streamlit secrets yoki muhit o'zgaruvchisidan oladi."""
+    # 1. Streamlit secrets (deploy qilganda)
+    try:
+        import streamlit as st
+        return st.secrets.get("ANTHROPIC_API_KEY")
+    except Exception:
+        pass
+    # 2. Muhit o'zgaruvchisi (local)
+    return os.environ.get("ANTHROPIC_API_KEY")
+
+
+def _build_db_context() -> str:
+    """Database'dan joriy holat ma'lumotini oladi — LLM'ga kontekst."""
+    try:
+        det = database.query(
+            "SELECT zone, SUM(car_count) AS cars, SUM(person_count) AS people, "
+            "MAX(road_occupancy) AS max_occ FROM detections GROUP BY zone")
+        an = database.query(
+            "SELECT COUNT(*) AS n FROM anomalies")[0]["n"]
+        top = max(det, key=lambda r: r["cars"]) if det else {}
+        rt = database.query(
+            "SELECT COUNT(*) AS n, AVG(car_count) AS ac, AVG(person_count) AS ap "
+            "FROM detection_log")[0]
+
+        lines = ["=== TIZIM HOLATI (traffic.db dan) ==="]
+        for r in det:
+            lines.append(
+                f"  {r['zone']}: {r['cars']} ta mashina, {r['people']} ta odam, "
+                f"max bandlik {r['max_occ']*100:.0f}%")
+        lines.append(f"  Anomaliyalar: {an} ta")
+        if top:
+            lines.append(f"  Eng band zona: {top['zone']} ({top['cars']} mashina)")
+        if rt['n'] > 0:
+            lines.append(
+                f"  Real-time log: {rt['n']} kadr, o'rtacha "
+                f"{rt['ac']:.1f} mashina / {rt['ap']:.1f} odam per kadr")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"(Database ma'lumoti olishda xato: {e})"
+
+
+SYSTEM_PROMPT = """Siz TPBI (Traffic & Pedestrian Business Intelligence) 
+tizimining AI yordamchisisiz. Siz trafik va piyodalar bo'yicha savollarni 
+qisqa, aniq va professional tarzda javob berasiz.
+
+Qoidalar:
+- Faqat berilgan database ma'lumotlariga asoslaning, o'zingizdan raqam 
+  to'qimang.
+- Javoblar qisqa bo'lsin (2-4 jumla). Agar savol aniq bo'lmasa, 
+  aniqlashtiring.
+- Ingliz yoki o'zbek tilida savol bo'lsa, shu tilda javob bering.
+- Agar ma'lumot etarli bo'lmasa, shuni aytib, qo'shimcha tavsiya bering."""
+
+
 class TrafficChatbot:
-    """Database'ga ulangan, niyat-tahlilli trafik chatbot."""
+    """
+    AI trafik chatboti — Claude API (LLM) + SQL zaxira.
+
+    Agar ANTHROPIC_API_KEY mavjud bo'lsa:
+      savol → DB kontekst → Claude API → tabiiy til javob
+
+    Agar API key yo'q bo'lsa:
+      savol → niyat tahlili → SQL so'rov → javob (eski usul)
+    """
 
     def __init__(self, df=None, kpis=None, anomalies=None, forecasts=None):
-        # Eski interfeys bilan moslik uchun argumentlar qoldirilgan, lekin
-        # endi chatbot ma'lumotni to'g'ridan-to'g'ri database'dan oladi.
         database.init_db()
         self.forecasts = forecasts or {}
-        # Bazadan mavjud zonalar ro'yxatini olamiz (savolda zona aniqlash uchun)
+        self.api_key = _get_api_key()
+        self.use_llm = bool(self.api_key)
+        self.conversation_history = []   # suhbat xotirasi (LLM uchun)
+
         try:
             rows = database.query("SELECT DISTINCT zone FROM detections")
             self.zones = [r["zone"] for r in rows]
         except Exception:
             self.zones = []
 
-
-    #  Asosiy kirish nuqtasi
     def ask(self, q: str) -> str:
         if not q or not q.strip():
             return self._help()
+
+        if self.use_llm:
+            return self._ask_llm(q)
+        else:
+            return self._ask_sql(q)
+
+    # --------------------------------------------------------------------- #
+    #  LLM yo'l: Claude API
+    # --------------------------------------------------------------------- #
+    def _ask_llm(self, q: str) -> str:
+        """Claude API orqali javob — database konteksti bilan."""
+        try:
+            import urllib.request
+            db_context = _build_db_context()
+            user_content = f"{db_context}\n\nSavol: {q}"
+
+            # Suhbat xotirasiga qo'shamiz
+            self.conversation_history.append(
+                {"role": "user", "content": user_content})
+
+            payload = json.dumps({
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 400,
+                "system": SYSTEM_PROMPT,
+                "messages": self.conversation_history[-10:],  # oxirgi 10 xabar
+            }).encode()
+
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                method="POST")
+
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+
+            answer = data["content"][0]["text"].strip()
+            # Faqat javobni (DB kontekstsiz) xotiraga saqlaymiz
+            self.conversation_history.append(
+                {"role": "assistant", "content": answer})
+            return answer
+
+        except Exception as e:
+            # API ishlamasa, SQL fallback'ga o'tamiz
+            self.use_llm = False
+            fallback = self._ask_sql(q)
+            return f"{fallback}\n\n*(Claude API: {e} — SQL rejimga o'tildi)*"
+
+    # --------------------------------------------------------------------- #
+    #  SQL zaxira yo'l (API keysiz ishlaydi)
+    # --------------------------------------------------------------------- #
+    def _ask_sql(self, q: str) -> str:
         ql = q.lower().strip()
-
-        # Bazada ma'lumot bormi - tekshiramiz
         if not self._has_data():
-            return ("Database hali bo'sh. Avval dashboard'da 'Pipeline'ni ishga "
-                    "tushiring yoki `python database.py` ni bajaring.")
-
+            return ("Database bo'sh. Pipeline'ni ishga tushiring.")
         zone = self._extract_zone(ql)
-
-        # --- Niyatni aniqlash va mos SQL javobini berish ---
-        if self._has(ql, ["anomal", "incident", "unusual", "congest", "jam", "tirband"]):
+        if self._has(ql, ["anomal", "incident", "congest", "jam", "tirband"]):
             return self._anomalies(zone)
-        if self._has(ql, ["forecast", "predict", "next hour", "expect", "bashorat"]):
+        if self._has(ql, ["forecast", "predict", "bashorat"]):
             return self._forecast(zone)
         if self._has(ql, ["peak", "busiest", "most", "eng ko", "eng band"]):
             return self._peak(zone)
-        if self._has(ql, ["how many car", "total car", "cars", "mashina", "avtomobil"]):
+        if self._has(ql, ["car", "mashina", "avtomobil"]):
             return self._cars(zone, ql)
-        if self._has(ql, ["how many people", "pedestrian", "people", "footfall",
-                          "odam", "piyoda"]):
+        if self._has(ql, ["people", "person", "pedestrian", "odam", "piyoda"]):
             return self._people(zone, ql)
-        if self._has(ql, ["safe", "capacity", "risk", "xavf", "sig'im"]):
+        if self._has(ql, ["safe", "risk", "xavf"]):
             return self._safety()
-        if self._has(ql, ["compare", "vs", "versus", "taqqosla"]):
+        if self._has(ql, ["compare", "vs", "taqqosla"]):
             return self._compare()
-        if self._has(ql, ["real-time", "realtime", "live", "jonli", "youtube"]):
+        if self._has(ql, ["real-time", "live", "jonli", "youtube"]):
             return self._realtime()
-        if self._has(ql, ["help", "what can you", "yordam"]):
+        if self._has(ql, ["help", "yordam"]):
             return self._help()
+        return ("Tushunmadim. So'rang: mashina/odam soni, anomaliya, "
+                "eng band zona, xavf, taqqoslash. "
+                "Masalan: 'How many cars at JCT_MainRoad?'")
 
-        return ("Tushunmadim. Men quyidagilarni bilaman: mashina/odam soni, "
-                "eng band zona, anomaliya/tirbandlik, xavf, zonalar taqqoslash. "
-                "Masalan: 'How many cars at JCT_MainRoad?' yoki "
-                "'Which zone is busiest?'")
-
-
-    #  Yordamchi funksiyalar
+    # --------------------------------------------------------------------- #
+    #  Yordamchi
+    # --------------------------------------------------------------------- #
     @staticmethod
-    def _has(q: str, ks: list[str]) -> bool:
-        return any(k in q for k in ks)
+    def _has(q, ks): return any(k in q for k in ks)
 
-    def _has_data(self) -> bool:
+    def _has_data(self):
         try:
-            return database.query("SELECT COUNT(*) AS n FROM detections")[0]["n"] > 0
+            return database.query(
+                "SELECT COUNT(*) AS n FROM detections")[0]["n"] > 0
         except Exception:
             return False
 
-    def _extract_zone(self, q: str) -> Optional[str]:
-        """Savoldan zona nomini ajratadi (to'liq yoki qisqa nom)."""
+    def _extract_zone(self, q):
         for z in self.zones:
             if z.lower() in q or z.split("_")[-1].lower() in q:
                 return z
         return None
 
-
-    #  SQL'ga asoslangan javoblar
-    def _cars(self, zone: Optional[str], q: str) -> str:
+    def _cars(self, zone, q):
         if zone:
             r = database.query(
-                "SELECT SUM(car_count) AS total, MAX(car_count) AS peak "
-                "FROM detections WHERE zone = ?", (zone,))[0]
-            return (f"{zone} zonasida bugun jami {r['total'] or 0:,} mashina aniqlandi "
-                    f"(eng yuqori bir vaqtda: {r['peak'] or 0} ta).")
-        r = database.query("SELECT SUM(car_count) AS total FROM detections")[0]
+                "SELECT SUM(car_count) AS t, MAX(car_count) AS p "
+                "FROM detections WHERE zone=?", (zone,))[0]
+            return (f"{zone}: {r['t'] or 0:,} mashina (peak: {r['p'] or 0}).")
+        r = database.query("SELECT SUM(car_count) AS t FROM detections")[0]
         top = database.query(
             "SELECT zone, SUM(car_count) AS c FROM detections "
             "GROUP BY zone ORDER BY c DESC LIMIT 1")[0]
-        return (f"Barcha zonalarda jami {r['total'] or 0:,} mashina aniqlandi. "
-                f"Eng ko'pi {top['zone']} da ({top['c']:,} ta).")
+        return (f"Jami {r['t'] or 0:,} mashina. "
+                f"Eng ko'p: {top['zone']} ({top['c']:,}).")
 
-    def _people(self, zone: Optional[str], q: str) -> str:
+    def _people(self, zone, q):
         if zone:
             r = database.query(
-                "SELECT SUM(person_count) AS total, MAX(person_count) AS peak "
-                "FROM detections WHERE zone = ?", (zone,))[0]
-            return (f"{zone} zonasida bugun jami {r['total'] or 0:,} odam aniqlandi "
-                    f"(eng yuqori bir vaqtda: {r['peak'] or 0} ta).")
-        r = database.query("SELECT SUM(person_count) AS total FROM detections")[0]
+                "SELECT SUM(person_count) AS t, MAX(person_count) AS p "
+                "FROM detections WHERE zone=?", (zone,))[0]
+            return (f"{zone}: {r['t'] or 0:,} odam (peak: {r['p'] or 0}).")
+        r = database.query(
+            "SELECT SUM(person_count) AS t FROM detections")[0]
         top = database.query(
             "SELECT zone, SUM(person_count) AS c FROM detections "
             "GROUP BY zone ORDER BY c DESC LIMIT 1")[0]
-        return (f"Barcha zonalarda jami {r['total'] or 0:,} odam aniqlandi. "
-                f"Eng ko'pi {top['zone']} da ({top['c']:,} ta).")
+        return (f"Jami {r['t'] or 0:,} odam. "
+                f"Eng ko'p: {top['zone']} ({top['c']:,}).")
 
-    def _peak(self, zone: Optional[str]) -> str:
-        # Eng yuqori yo'l bandligi qaysi zona va qachon
+    def _peak(self, zone):
         r = database.query(
             "SELECT zone, timestamp, road_occupancy FROM detections "
             "ORDER BY road_occupancy DESC LIMIT 1")[0]
-        t = str(r["timestamp"])[11:16] if len(str(r["timestamp"])) > 15 else r["timestamp"]
-        return (f"Eng yuqori yo'l bandligi {r['zone']} zonasida, soat {t} da bo'lgan "
-                f"({r['road_occupancy']*100:.0f}% sig'imdan).")
+        t = str(r["timestamp"])[11:16]
+        return (f"Eng yuqori bandlik: {r['zone']}, soat {t} "
+                f"({r['road_occupancy']*100:.0f}%).")
 
-    def _anomalies(self, zone: Optional[str]) -> str:
+    def _anomalies(self, zone):
         n = database.query("SELECT COUNT(*) AS n FROM anomalies")[0]["n"]
         if n == 0:
-            return "Bugun hech qanday anomaliya yoki tirbandlik aniqlanmadi."
-        rows = database.query(
-            "SELECT zone, timestamp, car_count, person_count, road_occupancy, "
-            "anomaly_reason FROM anomalies ORDER BY road_occupancy DESC LIMIT 1")
-        t = rows[0]
-        ts = str(t["timestamp"])[11:16] if len(str(t["timestamp"])) > 15 else t["timestamp"]
-        return (f"{n} ta anomaliya aniqlandi. Eng jiddiysi {t['zone']} da, soat {ts} da: "
-                f"{t['car_count']} mashina ({t['road_occupancy']*100:.0f}% bandlik), "
-                f"{t['person_count']} odam. Sabab: {t['anomaly_reason']}.")
-
-    def _safety(self) -> str:
-        # 85% dan yuqori bandlikka chiqgan zonalar
-        rows = database.query(
-            "SELECT DISTINCT zone FROM detections WHERE road_occupancy >= 0.85")
-        if rows:
-            zs = ", ".join(r["zone"] for r in rows)
-            return (f"Xavf aniqlandi. Quyidagi zonalar 85%+ yo'l bandligiga yetgan: {zs}. "
-                    f"Svetofor vaqtini ko'rib chiqish va operatorni ogohlantirish tavsiya etiladi.")
-        return "Barcha yo'llar bugun 85% tirbandlik chegarasidan past qoldi."
-
-    def _compare(self) -> str:
-        rows = database.query(
-            "SELECT zone, SUM(car_count) AS cars, SUM(person_count) AS people "
-            "FROM detections GROUP BY zone ORDER BY cars DESC")
-        lines = [f"{r['zone']}: {r['cars']:,} mashina, {r['people']:,} odam" for r in rows]
-        return "Zonalar taqqoslash:\n" + "\n".join(lines)
-
-    def _realtime(self) -> str:
-        """Real-time detection log'idan (youtube_detect.py) ma'lumot beradi."""
-        try:
-            n = database.query("SELECT COUNT(*) AS n FROM detection_log")[0]["n"]
-        except Exception:
-            n = 0
-        if n == 0:
-            return ("Real-time jurnalida hali yozuv yo'q. `youtube_detect.py` ni "
-                    "ishga tushiring — u jonli detection natijalarini bazaga yozadi.")
+            return "Anomaliya topilmadi."
         r = database.query(
-            "SELECT AVG(car_count) AS ac, AVG(person_count) AS ap, "
-            "MAX(car_count) AS mc, MAX(person_count) AS mp FROM detection_log")[0]
-        return (f"Real-time jurnalida {n} ta yozuv bor (youtube_detect.py'dan). "
-                f"O'rtacha kadrda {r['ac']:.1f} mashina, {r['ap']:.1f} odam; "
-                f"eng ko'p {r['mc']} mashina, {r['mp']} odam bir vaqtda.")
+            "SELECT zone, timestamp, car_count, road_occupancy, anomaly_reason "
+            "FROM anomalies ORDER BY road_occupancy DESC LIMIT 1")[0]
+        ts = str(r["timestamp"])[11:16]
+        return (f"{n} anomaliya. Eng jiddiysi: {r['zone']}, {ts}, "
+                f"{r['car_count']} mashina ({r['road_occupancy']*100:.0f}%). "
+                f"Sabab: {r['anomaly_reason']}.")
 
-    def _forecast(self, zone: Optional[str]) -> str:
+    def _safety(self):
+        rows = database.query(
+            "SELECT DISTINCT zone FROM detections WHERE road_occupancy>=0.85")
+        if rows:
+            return (f"XAVF: {', '.join(r['zone'] for r in rows)} "
+                    f"85%+ bandlikka yetgan.")
+        return "Barcha yo'llar 85% chegarasidan past."
+
+    def _compare(self):
+        rows = database.query(
+            "SELECT zone, SUM(car_count) AS c, SUM(person_count) AS p "
+            "FROM detections GROUP BY zone ORDER BY c DESC")
+        return "Taqqoslash:\n" + "\n".join(
+            f"  {r['zone']}: {r['c']:,} mashina, {r['p']:,} odam"
+            for r in rows)
+
+    def _forecast(self, zone):
         z = zone or (self.zones[0] if self.zones else None)
-        f = self.forecasts.get(z) if z else None
+        if not z:
+            return "Zona aniqlanmadi."
+        f = self.forecasts.get(z)
         if not f:
-            # Forecast ma'lumoti yo'q bo'lsa, bazadagi o'rtachadan oddiy baho
-            if not z:
-                return "Bashorat uchun zona aniqlanmadi."
             r = database.query(
-                "SELECT AVG(car_count) AS avg_c, MAX(car_count) AS max_c "
-                "FROM detections WHERE zone = ?", (z,))[0]
-            return (f"{z} uchun: o'rtacha {r['avg_c']:.0f} mashina, eng yuqori {r['max_c']} ta. "
-                    f"(To'liq bashorat uchun dashboard'da pipeline'ni ishga tushiring.)")
-        risk = ("tirbandlik kutilmoqda (>85%)" if f.get("congestion_predicted")
-                else "tirbandlik kutilmayapti")
-        return (f"{z} bashorati: keyingi soatда ~{f.get('car_predicted_peak')} mashina "
-                f"(sig'im {f.get('road_capacity')}), ~{f.get('person_predicted_peak')} odam, "
-                f"{risk}.")
+                "SELECT AVG(car_count) AS a, MAX(car_count) AS m "
+                "FROM detections WHERE zone=?", (z,))[0]
+            return (f"{z}: o'rtacha {r['a']:.0f}, max {r['m']} mashina.")
+        risk = "tirbandlik kutilmoqda" if f.get("congestion_predicted") \
+            else "tirbandlik kutilmaydi"
+        return (f"{z}: ~{f.get('car_predicted_peak')} mashina, "
+                f"~{f.get('person_predicted_peak')} odam. {risk}.")
+
+    def _realtime(self):
+        try:
+            r = database.query(
+                "SELECT COUNT(*) AS n, AVG(car_count) AS ac, "
+                "AVG(person_count) AS ap FROM detection_log")[0]
+        except Exception:
+            return "Real-time jurnal mavjud emas."
+        if r["n"] == 0:
+            return ("Real-time jurnalida yozuv yo'q. "
+                    "youtube_detect.py ni ishga tushiring.")
+        return (f"Real-time: {r['n']} kadr, o'rtacha "
+                f"{r['ac']:.1f} mashina / {r['ap']:.1f} odam.")
 
     def _help(self) -> str:
-        return ("Men database'ga ulangan trafik chatbotman. So'rang: mashina/odam soni "
-                "(zona bo'yicha ham), eng band zona va vaqt, anomaliya/tirbandlik, "
-                "xavf darajasi, zonalar taqqoslash, bashorat. "
-                "Masalan: 'How many cars at MALL_CarParkIn?', 'Which zone is busiest?', "
-                "'Compare zones', 'Any congestion?'")
+        mode = "Claude API (LLM)" if self.use_llm else "SQL (fallback)"
+        return (f"Men TPBI trafik chatbotiman [{mode}]. "
+                "So'rang: mashina/odam soni, anomaliya, eng band zona, "
+                "xavf, taqqoslash, bashorat, real-time. "
+                "Masalan: 'Compare zones', 'Any congestion?'")
+
+    @property
+    def mode(self) -> str:
+        return "Claude API (LLM)" if self.use_llm else "SQL keyword matching"
 
 
 if __name__ == "__main__":
-    # Test: avval bazani to'ldiramiz, keyin savollar beramiz
     import synthetic_data
     database.init_db()
     df = synthetic_data.generate_traffic_timeseries()
     database.save_dataframe(df)
-
     bot = TrafficChatbot()
-    for q in ["How many cars in total?",
-              "How many cars at JCT_MainRoad?",
-              "Which zone is busiest?",
-              "Compare zones",
-              "Is it safe?",
-              "How many people at HUB_StationFwd?"]:
-        print(f"USER: {q}\n BOT: {bot.ask(q)}\n")
+    print(f"Rejim: {bot.mode}")
+    for q in ["How many cars in total?", "Compare zones", "Any anomalies?"]:
+        print(f"Q: {q}\nA: {bot.ask(q)}\n")

@@ -251,13 +251,28 @@ with tab4:
 
 # --- Chatbot ---
 with tab5:
-    st.markdown("**Trafik bo'yicha savol bering** (ingliz tilida)")
-    st.caption("Masalan: *Was there any congestion today?*, "
-               "*What is the busiest zone?*, *Is the main road safe?*")
-
     if "bot" not in st.session_state:
-        st.session_state["bot"] = TrafficChatbot(
-            df, kpis, anomalies, forecasts)
+        st.session_state["bot"] = TrafficChatbot(df, kpis, anomalies, forecasts)
+    bot = st.session_state["bot"]
+
+    # Rejim ko'rsatkichi (LLM yoki SQL)
+    if bot.use_llm:
+        st.success("🤖 **Claude AI (LLM) rejimi** — tabiiy til, kontekstli "
+                   "suhbat, database'dan o'qiydi.")
+    else:
+        st.warning(
+            "⚠️ **SQL rejimi** (zaxira) — Claude API topilmadi. "
+            "LLM yoqish uchun: Streamlit **Settings → Secrets** ga "
+            "`ANTHROPIC_API_KEY = \"sk-ant-...\"` qo'shing. "
+            "Yoki terminalda: `export ANTHROPIC_API_KEY=sk-ant-...` "
+            "va dashboardni qayta ishga tushiring.")
+
+    st.markdown("**Trafik bo'yicha savol bering**")
+    st.caption(
+        "Masalan: *Was there any congestion today?*, "
+        "*Which zone has the most cars?*, *Is the main road safe?*, "
+        "*Compare all zones*, *Forecast for JCT_MainRoad?*")
+
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
 
@@ -270,10 +285,29 @@ with tab5:
         st.session_state["chat_history"].append(("user", user_q))
         with st.chat_message("user"):
             st.write(user_q)
-        answer = st.session_state["bot"].ask(user_q)
+        answer = bot.ask(user_q)
         st.session_state["chat_history"].append(("assistant", answer))
         with st.chat_message("assistant"):
             st.write(answer)
+
+    with st.expander("ℹ️ Chatbot arxitekturasi haqida (examiner uchun)"):
+        st.markdown("""
+**Chatbot dizayni (BTEC Task 1 — AI Chatbot):**
+
+| Qatlam | Texnologiya | Maqsad |
+|--------|-------------|--------|
+| **Birlamchi** | Claude API (`claude-sonnet-4`) | Tabiiy til, kontekstli suhbat |
+| **Zaxira** | SQL + Intent matching | API'siz ishlash kafolati |
+| **Ma'lumot** | SQLite (`traffic.db`) | Haqiqiy DB raqamlari |
+
+**RAG-lite pattern**: Har so'rovda tizim `traffic.db`'dan joriy holat 
+ma'lumotini olib, LLM'ga kontekst sifatida beradi. Shu tarzda LLM 
+"hallucinate" qilmaydi — faqat haqiqiy bazaviy raqamlarni tushuntiradi.
+
+**Suhbat xotirasi**: LLM rejimida oxirgi 10 xabar saqlanadi, 
+shuning uchun "avvalgi savolim haqida ko'proq" kabi davomli suhbat 
+mumkin.
+""")
 
 # --- Baholash (metrics / performance / data quality) ---
 with tab6:
@@ -313,29 +347,139 @@ with tab6:
         "Precision / Recall / F1 ni hisoblash uchun `metrics.py` modulida "
         "`detection_accuracy(predictions, ground_truth)` funksiyasi bor. "
         "U IoU≥0.5 asosida to'g'ri/noto'g'ri aniqlashlarni sanaydi. "
-        "Ground-truth (qo'lda belgilangan to'g'ri javoblar) validatsiya "
-        "to'plamida mavjud bo'lganda to'liq baho beradi. Hozircha model "
-        "ishonch (confidence) statistikasi annotatsiya jarayonida o'lchanadi.")
+        "Ground-truth validatsiya to'plamida mavjud bo'lganda to'liq baho beradi.")
 
-# --- Boshqaruv & Maxfiylik (governance) ---
+# --- Boshqaruv & Maxfiylik + Power BI + Scalability ---
 with tab7:
     import governance
     gov = governance.governance_summary()
-    st.markdown("### Boshqaruv, axloq va maxfiylik")
-    st.caption("BTEC mezoni: C.P5 (governance, ethics, privacy, compliance)")
-    st.markdown(gov["privacy"])
-    st.divider()
-    st.markdown(gov["ethics"])
-    st.divider()
-    st.markdown(gov["compliance"])
-    st.divider()
-    st.markdown(
-        "**Power BI haqida**: ushbu loyiha namoyish uchun Streamlit + "
-        "matplotlib ishlatadi (bepul, Python bilan to'liq integratsiya). "
-        "Ma'lumotlar SQLite (`traffic.db`) va Excel (`Traffic_BI_Report.xlsx`) "
-        "formatlarida saqlanadi — ikkalasini ham Power BI to'g'ridan-to'g'ri "
-        "import qila oladi (Get Data → SQLite/Excel). Shunday qilib tizim "
-        "Power BI bilan mos, lekin platformaga bog'liq emas.")
+    st.markdown("### Boshqaruv, axloq, maxfiylik va kengayish")
+    st.caption("BTEC mezonlari: C.P5, Task 2 (Power BI), A.P1, B.M2 (scalability)")
+
+    inner_tab1, inner_tab2, inner_tab3 = st.tabs(
+        ["🔒 Maxfiylik & Axloq", "📊 Power BI integratsiya", "⚙️ Masshtablilik"])
+
+    with inner_tab1:
+        st.markdown(gov["privacy"])
+        st.divider()
+        st.markdown(gov["ethics"])
+        st.divider()
+        st.markdown(gov["compliance"])
+
+    with inner_tab2:
+        st.markdown("#### Power BI integratsiya (Task 2)")
+        st.info(
+            "Ushbu tizim **Streamlit + matplotlib** ishlatadi (bepul, Python "
+            "bilan to'liq integratsiya, portativ). Ma'lumotlar Power BI "
+            "iste'mol qiladigan formatlarda eksport qilinadi.")
+
+        st.markdown("**Power BI'ga ulanish — 2 yo'l:**")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**1. SQLite orqali (tavsiya)**")
+            st.code("""
+# Power BI Desktop:
+# Get Data → More → Database
+# → SQLite Database
+# → Fayl tanlang: traffic.db
+# → Jadvallar: detections,
+#   anomalies, forecasts
+            """, language="text")
+
+        with col_b:
+            st.markdown("**2. Excel orqali**")
+            st.code("""
+# Power BI Desktop:
+# Get Data → Excel workbook
+# → Traffic_BI_Report.xlsx
+# → Varaqlar: Sheet1, ...
+# → Load → Vizualizatsiya
+            """, language="text")
+
+        st.markdown("**Tayyor eksport fayllar:**")
+        db_path = os.path.join(config.BASE_DIR, "traffic.db")
+        xlsx_path = os.path.join(config.OUTPUT_DIR, "Traffic_BI_Report.xlsx")
+        c1, c2 = st.columns(2)
+        with c1:
+            exists = "✅ Tayyor" if os.path.exists(db_path) else "⏳ Kerak emas"
+            st.metric("traffic.db (SQLite)", exists)
+        with c2:
+            exists = "✅ Tayyor" if os.path.exists(xlsx_path) else "⏳ Pipeline kerak"
+            st.metric("Traffic_BI_Report.xlsx", exists)
+
+        st.markdown("""
+**Arxitektura qaroriga asoslash:**
+Namoyish uchun Streamlit tanlandi, chunki:
+- Python loyihasi bilan to'g'ridan-to'g'ri integratsiya (alohida litsenziya kerak emas)
+- Ma'lumot modeli Power BI bilan mos (SQLite, Excel eksport)
+- Akademik muhitda tezkor prototiplash uchun optimallar
+""")
+
+    with inner_tab3:
+        st.markdown("#### Masshtablilik arxitekturasi (A.P1, B.M2)")
+
+        st.markdown("""
+**Joriy dizayn — ko'p kamera uchun tayyor:**
+
+Har bir detection qatorida `zone` va `source` ustunlari mavjud. Yangi kamera 
+qo'shish = yangi `zone` ta'riflash, kod o'zgarmaydi.
+""")
+
+        st.code("""
+# Ko'p kamera — paralel ishlov (threading dizayni)
+import threading, queue
+
+detection_queue = queue.Queue(maxsize=500)
+
+def camera_worker(zone_id, video_source):
+    \"\"\"Har bir kamera — alohida thread\"\"\"
+    detector = MultiClassDetector()
+    cap = cv2.VideoCapture(video_source)
+    while True:
+        ok, frame = cap.read()
+        if not ok: break
+        detections = detector.detect(frame)
+        detection_queue.put({
+            "zone": zone_id,
+            "detections": detections,
+            "timestamp": datetime.now()
+        })
+
+def db_writer_worker():
+    \"\"\"Bitta thread — bazaga yozish (thread-safe)\"\"\"
+    while True:
+        item = detection_queue.get()
+        database.log_realtime_detection(
+            source=item["zone"], ...)
+
+# 4 ta kamera — 4 ta thread + 1 yozuvchi
+cameras = {"JCT_MainRoad": 0, "GATE_Campus": 1,
+           "HUB_StationFwd": 2, "MALL_CarParkIn": 3}
+threads = [threading.Thread(target=camera_worker,
+           args=(z, s)) for z, s in cameras.items()]
+writer = threading.Thread(target=db_writer_worker)
+""", language="python")
+
+        st.markdown("""
+**Kengayish strategiyasi:**
+
+| Daraja | Yechim | Sabab |
+|--------|--------|-------|
+| **4 kamera** | Threading + Queue | Bitta mashinada, GIL muammo yo'q (I/O bound) |
+| **10+ kamera** | Multiprocessing | CPU og'ir detection uchun alohida jarayonlar |
+| **100+ kamera** | Distributed (Kafka + microservices) | Tarmoqli ishlov, yuqori mavjudlik |
+
+**SQLite → PostgreSQL ko'chirish**: `database.py` da faqat ulanish qatorini 
+o'zgartirish kifoya — barcha SQL so'rovlar bir xil qoladi. 
+Bu arxitekturaviy moslashuvchanlikning asosiy afzalligi.
+
+**Joriy cheklov**: namoyish maqsadida bitta jarayonli (single-threaded) 
+ishlov qo'llanildi. Ko'p kamerada threading/multiprocessing qo'shimcha 
+o'zgarishlar bilan amalga oshiriladi (yuqoridagi dizayn ko'rsatilganidek).
+""")
+        st.divider()
+        st.markdown(gov["compliance"])
 
 # ---- Pastki qism ---------------------------------------------------------- #
 st.divider()
