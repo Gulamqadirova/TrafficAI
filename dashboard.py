@@ -1,20 +1,3 @@
-"""
-dashboard.py  -  TPBI Platform uchun veb-interfeys (UI / Dashboard).
-
-Bu butun loyihani bitta chiroyli brauzer oynasiga jamlaydi:
-  - Pipeline'ni bir tugma bilan ishga tushirish
-  - KPI ko'rsatkichlar (kartalar)
-  - Grafiklar (flow, heatmap, anomaly, forecast, site comparison)
-  - Anomaliyalar jadvali
-  - Annotatsiyalangan video
-  - Chatbot bilan savol-javob
-
-ISHLATISH:
-    pip install streamlit
-    streamlit run dashboard.py
-
-So'ng brauzer avtomatik ochiladi (http://localhost:8501).
-"""
 from __future__ import annotations
 import json
 import os
@@ -88,25 +71,50 @@ def _ensure_youtube_video() -> str:
 @st.cache_resource(show_spinner=False)
 def run_full_pipeline(write_video: bool = True):
     """Butun analitika quvurini ishga tushiradi va natijalarni qaytaradi."""
+    import metrics, governance
+    timer = metrics.PerformanceTimer()
+
     df = synthetic_data.generate_traffic_timeseries()
+
+    # --- Ma'lumot sifati tekshiruvi va tozalash (Task 4) ---
+    quality = governance.validate_dataframe(df)
+    df, clean_report = governance.clean_dataframe(df)
 
     # Video manbasi: avval YouTube'ni urinamiz, bo'lmasa synthetic.
     yt_video = _ensure_youtube_video()
-    if yt_video:
-        cv = video_analytics.analyse_video(video_path=yt_video,
-                                           write_annotated=write_video)
-    else:
-        synthetic_data.generate_traffic_clip()
-        cv = video_analytics.analyse_video(write_annotated=write_video)
+    with timer.stage("detection"):
+        if yt_video:
+            cv = video_analytics.analyse_video(video_path=yt_video,
+                                               write_annotated=write_video)
+        else:
+            synthetic_data.generate_traffic_clip()
+            cv = video_analytics.analyse_video(write_annotated=write_video)
+    timer.record_frames(cv.get("frames_processed", 0))
 
-    scored = anomaly_detection.detect_anomalies(df)
-    anomalies = anomaly_detection.anomaly_summary(scored)
-    forecasts = predictive_analytics.forecast_all_zones(df)
-    kpis = bi_dashboard.compute_kpis(df, cv, anomalies)
-    charts = bi_dashboard.build_all_charts(df, scored, kpis, forecasts)
-    bi_dashboard.write_excel_report(df, scored, kpis, anomalies, forecasts)
+    with timer.stage("analytics"):
+        scored = anomaly_detection.detect_anomalies(df)
+        anomalies = anomaly_detection.anomaly_summary(scored)
+        forecasts = predictive_analytics.forecast_all_zones(df)
+        kpis = bi_dashboard.compute_kpis(df, cv, anomalies)
+        charts = bi_dashboard.build_all_charts(df, scored, kpis, forecasts)
+        bi_dashboard.write_excel_report(df, scored, kpis, anomalies, forecasts)
+
+    # --- Hammasini DATABASE'ga saqlash (chatbot shu yerdan o'qiydi) ---
+    try:
+        import database
+        database.init_db()
+        database.save_dataframe(df)
+        database.save_anomalies(anomalies)
+        database.save_forecasts(forecasts)
+        database.save_kpis(kpis)
+    except Exception as e:
+        print(f"Database'ga yozishda ogohlantirish: {e}")
+
+    perf = timer.report()
     return {"df": df, "scored": scored, "cv": cv, "anomalies": anomalies,
-            "forecasts": forecasts, "kpis": kpis, "charts": charts}
+            "forecasts": forecasts, "kpis": kpis, "charts": charts,
+            "performance": perf, "data_quality": quality,
+            "clean_report": clean_report}
 
 
 def kpi_card(label: str, value, band: str = ""):
@@ -176,8 +184,9 @@ st.divider()
 
 
 # TABLAR
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📈 Grafiklar", "⚠️ Anomaliyalar", "🔮 Bashorat", "🎬 Video", "💬 Chatbot"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    ["📈 Grafiklar", "⚠️ Anomaliyalar", "🔮 Bashorat", "🎬 Video", "💬 Chatbot",
+     "📐 Baholash", "🔒 Boshqaruv & Maxfiylik"])
 
 # --- Grafiklar ---
 with tab1:
@@ -209,18 +218,25 @@ with tab3:
     fpath = charts.get("forecast")
     if fpath and os.path.exists(fpath):
         st.image(fpath, use_container_width=True)
-    st.markdown("**Zonalar bo'yicha bashorat**")
+    st.markdown("**Zonalar bo'yicha bashorat** (95% ishonch oralig'i bilan)")
     frows = []
     for z, f in forecasts.items():
+        car_lo = f.get("car_forecast_lower", [])
+        car_hi = f.get("car_forecast_upper", [])
+        peak = f.get("car_predicted_peak")
+        ci = (f"{min(car_lo)}–{max(car_hi)}" if car_lo and car_hi else "—")
         frows.append({
             "Zona": z,
-            "Mashina (peak)": f.get("car_predicted_peak"),
+            "Mashina (peak)": peak,
+            "Ishonch oralig'i (95%)": ci,
             "Odam (peak)": f.get("person_predicted_peak"),
             "Yo'l sig'imi": f.get("road_capacity"),
             "Tirbandlik?": "Ha" if f.get("congestion_predicted") else "Yo'q",
             "MAE (mashina)": f.get("car_mae"),
         })
     st.dataframe(pd.DataFrame(frows), use_container_width=True)
+    st.caption("Ishonch oralig'i = bashorat ± 1.96σ (qoldiqlar standart "
+               "og'ishiga asoslangan). Kengroq oraliq — kattaroq noaniqlik.")
 
 # --- Video ---
 with tab4:
@@ -258,6 +274,68 @@ with tab5:
         st.session_state["chat_history"].append(("assistant", answer))
         with st.chat_message("assistant"):
             st.write(answer)
+
+# --- Baholash (metrics / performance / data quality) ---
+with tab6:
+    st.markdown("### Tizim baholash (System Evaluation)")
+    st.caption("BTEC mezonlari: C.M3 (AI aniqligi), Task 4 (unumdorlik, sifat)")
+
+    perf = results.get("performance", {})
+    quality = results.get("data_quality", {})
+    clean_report = results.get("clean_report", {})
+    cv = results.get("cv", {})
+
+    e1, e2, e3 = st.columns(3)
+    with e1: kpi_card("FPS (kadr/sek)", perf.get("fps", "—"))
+    with e2: kpi_card("Qayta ishlangan kadr", cv.get("frames_processed", "—"))
+    with e3: kpi_card("Jami vaqt (s)", perf.get("total_runtime_sec", "—"))
+
+    st.markdown("**Bosqichlar bo'yicha vaqt (pipeline timing)**")
+    timings = perf.get("stage_timings_sec", {})
+    if timings:
+        st.dataframe(pd.DataFrame(
+            [{"Bosqich": k, "Vaqt (s)": v} for k, v in timings.items()]),
+            use_container_width=True)
+
+    st.markdown("**Ma'lumot sifati (Data Quality)**")
+    dq_col1, dq_col2 = st.columns(2)
+    with dq_col1:
+        st.metric("Qatorlar", quality.get("rows", "—"))
+        st.metric("Bo'sh (NaN) qiymatlar", quality.get("missing_values", "—"))
+    with dq_col2:
+        st.metric("Takroriy qatorlar", quality.get("duplicate_rows", "—"))
+        st.metric("Holat", "✅ Toza" if quality.get("valid") else "⚠️ Tuzatildi")
+    if clean_report:
+        st.caption(f"Tozalash: {clean_report}")
+
+    st.markdown("**AI aniqligi (Detection accuracy)**")
+    st.info(
+        "Precision / Recall / F1 ni hisoblash uchun `metrics.py` modulida "
+        "`detection_accuracy(predictions, ground_truth)` funksiyasi bor. "
+        "U IoU≥0.5 asosida to'g'ri/noto'g'ri aniqlashlarni sanaydi. "
+        "Ground-truth (qo'lda belgilangan to'g'ri javoblar) validatsiya "
+        "to'plamida mavjud bo'lganda to'liq baho beradi. Hozircha model "
+        "ishonch (confidence) statistikasi annotatsiya jarayonida o'lchanadi.")
+
+# --- Boshqaruv & Maxfiylik (governance) ---
+with tab7:
+    import governance
+    gov = governance.governance_summary()
+    st.markdown("### Boshqaruv, axloq va maxfiylik")
+    st.caption("BTEC mezoni: C.P5 (governance, ethics, privacy, compliance)")
+    st.markdown(gov["privacy"])
+    st.divider()
+    st.markdown(gov["ethics"])
+    st.divider()
+    st.markdown(gov["compliance"])
+    st.divider()
+    st.markdown(
+        "**Power BI haqida**: ushbu loyiha namoyish uchun Streamlit + "
+        "matplotlib ishlatadi (bepul, Python bilan to'liq integratsiya). "
+        "Ma'lumotlar SQLite (`traffic.db`) va Excel (`Traffic_BI_Report.xlsx`) "
+        "formatlarida saqlanadi — ikkalasini ham Power BI to'g'ridan-to'g'ri "
+        "import qila oladi (Get Data → SQLite/Excel). Shunday qilib tizim "
+        "Power BI bilan mos, lekin platformaga bog'liq emas.")
 
 # ---- Pastki qism ---------------------------------------------------------- #
 st.divider()
