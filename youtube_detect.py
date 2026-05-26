@@ -7,6 +7,14 @@ try:
 except ImportError:
     yt_dlp = None
 
+# Real-time detection natijalarini database'ga yozish uchun (A.P2)
+try:
+    import database
+    database.init_db()
+    _DB_OK = True
+except Exception:
+    _DB_OK = False
+
 
 
 #  SOZLAMALAR
@@ -119,6 +127,16 @@ def main():
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         cv2.putText(frame, f"Car: {car_n}", (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+
+        # Real-time natijani DATABASE'ga yozish (har 30 kadrda - A.P2).
+        # Bu real-time detection'ni analitika quvuriga ulaydi.
+        if _DB_OK and frame_count % 5 == 0:
+            try:
+                database.log_realtime_detection(
+                    source="youtube_live", frame_index=frame_count,
+                    person_count=person_n, car_count=car_n)
+            except Exception as e:
+                print(f"[DB xato] {e}")
 
         cv2.imshow("YOLO - Person & Car Detection", frame)
 

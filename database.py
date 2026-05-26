@@ -88,7 +88,6 @@ def init_db() -> None:
     conn.close()
 
 
-
 #  Yozish funksiyalari
 def save_dataframe(df: pd.DataFrame, table: str = "detections") -> int:
     init_db()

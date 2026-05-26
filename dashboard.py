@@ -343,11 +343,38 @@ with tab6:
         st.caption(f"Tozalash: {clean_report}")
 
     st.markdown("**AI aniqligi (Detection accuracy)**")
-    st.info(
-        "Precision / Recall / F1 ni hisoblash uchun `metrics.py` modulida "
-        "`detection_accuracy(predictions, ground_truth)` funksiyasi bor. "
-        "U IoU≥0.5 asosida to'g'ri/noto'g'ri aniqlashlarni sanaydi. "
-        "Ground-truth validatsiya to'plamida mavjud bo'lganda to'liq baho beradi.")
+    # evaluate_accuracy.py natijasini o'qiymiz
+    acc_path = os.path.join(config.OUTPUT_DIR, "accuracy_report.json")
+    if os.path.exists(acc_path):
+        import json as _json
+        with open(acc_path) as _f:
+            acc_data = _json.load(_f)
+        mode = acc_data.get("evaluation_mode", "unknown")
+        a1, a2, a3 = st.columns(3)
+        if mode == "full_iou":
+            with a1: st.metric("Precision", acc_data.get("precision", "—"))
+            with a2: st.metric("Recall",    acc_data.get("recall", "—"))
+            with a3: st.metric("F1-score",  acc_data.get("f1_score", "—"))
+            st.caption(
+                f"IoU≥0.5, {acc_data.get('images_evaluated')} rasm, "
+                f"{acc_data.get('ground_truth_count')} GT annotatsiya. "
+                "Manba: `evaluate_accuracy.py`")
+        else:
+            with a1: st.metric("Baholangan rasmlar",
+                               acc_data.get("images_evaluated", "—"))
+            with a2: st.metric("Aniqlangan obyektlar",
+                               acc_data.get("count", "—"))
+            with a3: st.metric("O'rtacha ishonch",
+                               acc_data.get("mean_confidence", "—"))
+            st.warning(
+                "**Baholash rejimi: confidence statistikasi** — "
+                "ground-truth labellar (`datasets/train/labels/*.txt`) bo'sh. "
+                "To'liq precision/recall/F1 uchun YOLO format labellar kerak. "
+                "Baholash tizimi (`metrics.detection_accuracy`, IoU≥0.5) "
+                "to'liq joriy etilgan — `evaluate_accuracy.py` ni ishga tushiring.")
+    else:
+        st.info("Baholash natijasi yo'q. "
+                "`python evaluate_accuracy.py` ni ishga tushiring.")
 
 # --- Boshqaruv & Maxfiylik + Power BI + Scalability ---
 with tab7:

@@ -1,0 +1,126 @@
+{
+  "kpis": {
+    "total_observations": 1152,
+    "zones_monitored": 4,
+    "sites_monitored": 4,
+    "total_cars": 12175,
+    "total_people": 36140,
+    "peak_road_occupancy_pct": 200.0,
+    "peak_zone": "JCT_MainRoad",
+    "peak_time": "17:30",
+    "peak_band": "Congested",
+    "anomalies_detected": 24,
+    "busiest_car_site": "Commercial Area",
+    "busiest_ped_site": "Transport Hub",
+    "cv_backend": "yolov8",
+    "cv_frames": 150,
+    "cv_car_crossings": 0,
+    "cv_person_crossings": 0,
+    "cv_car_conf": 0.0,
+    "cv_person_conf": 0.0,
+    "zone_peak_road": {
+      "GATE_Campus": 132.0,
+      "HUB_StationFwd": 133.3,
+      "JCT_MainRoad": 200.0,
+      "MALL_CarParkIn": 136.0
+    },
+    "site_cars": {
+      "Commercial Area": 4047,
+      "Public Street": 3530,
+      "Transport Hub": 2515,
+      "Smart Campus": 2083
+    },
+    "site_peds": {
+      "Transport Hub": 15150,
+      "Smart Campus": 9353,
+      "Commercial Area": 6995,
+      "Public Street": 4642
+    }
+  },
+  "anomaly_count": 24,
+  "cv": {
+    "backend": "yolov8",
+    "frames_processed": 150,
+    "annotated_video": null,
+    "classes": {
+      "person": {
+        "peak_count": 0,
+        "mean_count": 0.0,
+        "unique_tracks": 0,
+        "crossings_l2r": 0,
+        "crossings_r2l": 0,
+        "total_crossings": 0,
+        "mean_confidence": 0.0
+      },
+      "car": {
+        "peak_count": 0,
+        "mean_count": 0.0,
+        "unique_tracks": 0,
+        "crossings_l2r": 0,
+        "crossings_r2l": 0,
+        "total_crossings": 0,
+        "mean_confidence": 0.0
+      }
+    }
+  },
+  "charts": {
+    "flow_trends": "/Users/baxronagulamqadirova/TrafficAI_business/code/outputs/chart_flow_trends.png",
+    "road_heatmap": "/Users/baxronagulamqadirova/TrafficAI_business/code/outputs/chart_road_heatmap.png",
+    "anomaly_timeline": "/Users/baxronagulamqadirova/TrafficAI_business/code/outputs/chart_anomaly_timeline.png",
+    "site_comparison": "/Users/baxronagulamqadirova/TrafficAI_business/code/outputs/chart_site_comparison.png",
+    "forecast": "/Users/baxronagulamqadirova/TrafficAI_business/code/outputs/chart_forecast.png"
+  },
+  "excel_report": "/Users/baxronagulamqadirova/TrafficAI_business/code/outputs/Traffic_BI_Report.xlsx",
+  "annotated_video": null,
+  "runtime_seconds": 7.39,
+  "performance": {
+    "frames_processed": 150,
+    "fps": 30.04,
+    "total_runtime_sec": 7.39,
+    "stage_timings_sec": {
+      "ingest": 0.466,
+      "detection": 4.993,
+      "analytics": 0.138,
+      "reporting": 1.012,
+      "db_write": 0.007
+    }
+  },
+  "data_quality": {
+    "valid": true,
+    "issues": [],
+    "rows": 1152,
+    "missing_values": 0,
+    "duplicate_rows": 0
+  },
+  "data_clean_report": {
+    "nan_filled": 0,
+    "car_count_negatives_fixed": 0,
+    "person_count_negatives_fixed": 0,
+    "duplicates_removed": 0
+  },
+  "database_summary": {
+    "detections": 1152,
+    "anomalies": 24,
+    "forecasts": 48,
+    "kpi_snapshots": 71,
+    "detection_log": 93
+  },
+  "chatbot_demo": [
+    {
+      "q": "Was there any congestion today?",
+      "a": "24 anomaliya. Eng jiddiysi: JCT_MainRoad, 17:55, 82 mashina (200%). Sabab: isolation_forest; car z=4.04."
+    },
+    {
+      "q": "Which zone is busiest?",
+      "a": "Eng yuqori bandlik: JCT_MainRoad, soat 17:30 (200%)."
+    },
+    {
+      "q": "Compare zones",
+      "a": "Taqqoslash:\n  MALL_CarParkIn: 4,047 mashina, 6,995 odam\n  JCT_MainRoad: 3,530 mashina, 4,642 odam\n  HUB_StationFwd: 2,515 mashina, 15,150 odam\n  GATE_Campus: 2,083 mashina, 9,353 odam"
+    },
+    {
+      "q": "Is the main road safe?",
+      "a": "XAVF: HUB_StationFwd, GATE_Campus, JCT_MainRoad, MALL_CarParkIn 85%+ bandlikka yetgan."
+    }
+  ]
+}

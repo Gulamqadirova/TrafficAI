@@ -6,6 +6,7 @@ from typing import Optional
 import database
 
 
+
 #  Claude API sozlash
 def _get_api_key() -> Optional[str]:
     """API kalitini Streamlit secrets yoki muhit o'zgaruvchisidan oladi."""
@@ -95,9 +96,8 @@ class TrafficChatbot:
         else:
             return self._ask_sql(q)
 
-    # --------------------------------------------------------------------- #
+
     #  LLM yo'l: Claude API
-    # --------------------------------------------------------------------- #
     def _ask_llm(self, q: str) -> str:
         """Claude API orqali javob — database konteksti bilan."""
         try:
@@ -141,9 +141,8 @@ class TrafficChatbot:
             fallback = self._ask_sql(q)
             return f"{fallback}\n\n*(Claude API: {e} — SQL rejimga o'tildi)*"
 
-    # --------------------------------------------------------------------- #
+
     #  SQL zaxira yo'l (API keysiz ishlaydi)
-    # --------------------------------------------------------------------- #
     def _ask_sql(self, q: str) -> str:
         ql = q.lower().strip()
         if not self._has_data():
@@ -171,9 +170,8 @@ class TrafficChatbot:
                 "eng band zona, xavf, taqqoslash. "
                 "Masalan: 'How many cars at JCT_MainRoad?'")
 
-    # --------------------------------------------------------------------- #
+
     #  Yordamchi
-    # --------------------------------------------------------------------- #
     @staticmethod
     def _has(q, ks): return any(k in q for k in ks)
 

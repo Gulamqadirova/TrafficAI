@@ -1,0 +1,10 @@
+{
+  "evaluation_mode": "confidence_stats",
+  "images_evaluated": 50,
+  "ground_truth_count": 0,
+  "predictions_count": 312,
+  "count": 312,
+  "mean_confidence": 0.567,
+  "min_confidence": 0.251,
+  "max_confidence": 0.92
+}
