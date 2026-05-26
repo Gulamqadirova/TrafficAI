@@ -18,8 +18,8 @@ except Exception:
 
 
 #  SOZLAMALAR
-YOUTUBE_URL = "https://www.youtube.com/watch?v=8JCk5M_xrBs"
-# Tayyor (pre-trained) YOLO modeli - mashina/odamlarni aniq topadi.
+# Taipei trafik — jonli kamera
+YOUTUBE_URL = "https://www.youtube.com/watch?v=1EiC9bvVGnk"
 MODEL_NAME = "yolov8n.pt"
 TARGET_CLASSES = [0, 2]            # COCO: 0 = person, 2 = car
 USE_STREAM = True
