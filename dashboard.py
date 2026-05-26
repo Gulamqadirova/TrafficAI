@@ -343,23 +343,55 @@ with tab6:
         st.caption(f"Tozalash: {clean_report}")
 
     st.markdown("**AI aniqligi (Detection accuracy)**")
-    # evaluate_accuracy.py natijasini o'qiymiz
     acc_path = os.path.join(config.OUTPUT_DIR, "accuracy_report.json")
     if os.path.exists(acc_path):
         import json as _json
-        with open(acc_path) as _f:
+        with open(acc_path, encoding="utf-8") as _f:
             acc_data = _json.load(_f)
         mode = acc_data.get("evaluation_mode", "unknown")
         a1, a2, a3 = st.columns(3)
-        if mode == "full_iou":
+
+        if mode in ("full_iou", "reference_model_eval"):
+            # Haqiqiy precision/recall/F1 raqamlari bor
             with a1: st.metric("Precision", acc_data.get("precision", "—"))
-            with a2: st.metric("Recall",    acc_data.get("recall", "—"))
-            with a3: st.metric("F1-score",  acc_data.get("f1_score", "—"))
-            st.caption(
-                f"IoU≥0.5, {acc_data.get('images_evaluated')} rasm, "
-                f"{acc_data.get('ground_truth_count')} GT annotatsiya. "
-                "Manba: `evaluate_accuracy.py`")
+            with a2: st.metric("Recall",    acc_data.get("recall",    "—"))
+            with a3: st.metric("F1-score",  acc_data.get("f1_score",  "—"))
+
+            if mode == "full_iou":
+                st.caption(
+                    f"✅ **Human ground-truth** (full IoU≥0.5) | "
+                    f"{acc_data.get('images_evaluated')} rasm | "
+                    f"{acc_data.get('ground_truth_count')} GT annotatsiya | "
+                    "Manba: `evaluate_accuracy.py`")
+            else:
+                # reference_model — aniq tushuntirish
+                teacher = acc_data.get("teacher_model", "yolov8s.pt")
+                student = acc_data.get("student_model", "yolov8n.pt")
+                st.caption(
+                    f"⚠️ **Teacher-Student (proxy) baholash** | "
+                    f"O'qituvchi: `{teacher}` (pseudo-GT) → "
+                    f"O'quvchi: `{student}` | IoU≥0.5 | "
+                    f"{acc_data.get('images_evaluated')} rasm")
+                st.info(
+                    "**Cheklov**: Bu raqamlar `reference_model_eval` rejimida — "
+                    f"`{teacher}` (kuchliroq model) pseudo ground-truth sifatida "
+                    "ishlatilgan. Human-annotated ground-truth ga teng emas. "
+                    "O'qituvchi xatolari ham 'to'g'ri' deb hisoblanadi. "
+                    "Bu yondashuv ML adabiyotida 'Teacher-Student evaluation' deb nomlanadi. "
+                    "Human labellar qo'shilsa, tizim avtomatik `full_iou` rejimiga o'tadi.")
+
+            # TP/FP/FN jadval
+            tp_fp = {
+                "Ko'rsatkich": ["True Positives (TP)", "False Positives (FP)",
+                                "False Negatives (FN)"],
+                "Qiymat": [acc_data.get("true_positives", "—"),
+                           acc_data.get("false_positives", "—"),
+                           acc_data.get("false_negatives", "—")],
+            }
+            st.dataframe(pd.DataFrame(tp_fp), use_container_width=True)
+
         else:
+            # confidence_stats fallback
             with a1: st.metric("Baholangan rasmlar",
                                acc_data.get("images_evaluated", "—"))
             with a2: st.metric("Aniqlangan obyektlar",
@@ -367,14 +399,13 @@ with tab6:
             with a3: st.metric("O'rtacha ishonch",
                                acc_data.get("mean_confidence", "—"))
             st.warning(
-                "**Baholash rejimi: confidence statistikasi** — "
-                "ground-truth labellar (`datasets/train/labels/*.txt`) bo'sh. "
-                "To'liq precision/recall/F1 uchun YOLO format labellar kerak. "
-                "Baholash tizimi (`metrics.detection_accuracy`, IoU≥0.5) "
-                "to'liq joriy etilgan — `evaluate_accuracy.py` ni ishga tushiring.")
+                "**Baholash rejimi: confidence statistikasi (fallback)** — "
+                "model yuklanmadi yoki rasmlar topilmadi. "
+                "`python evaluate_accuracy.py` ni ishga tushiring — "
+                "ultralytics o'rnatilgan bo'lsa, Teacher-Student baholash "
+                "avtomatik ishga tushadi va precision/recall/F1 hisoblaydi.")
     else:
-        st.info("Baholash natijasi yo'q. "
-                "`python evaluate_accuracy.py` ni ishga tushiring.")
+        st.info("Baholash natijasi yo'q. `python evaluate_accuracy.py` ni ishga tushiring.")
 
 # --- Boshqaruv & Maxfiylik + Power BI + Scalability ---
 with tab7:

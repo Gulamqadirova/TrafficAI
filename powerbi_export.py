@@ -132,7 +132,7 @@ def _write_readme(exported: dict[str, int]) -> None:
         "- Bir xil ma'lumot ustida Power BI hisobotlari qurish mumkin\n",
         "Power BI uchun tayyor eksport har `python powerbi_export.py` da yangilanadi.",
     ]
-    (EXPORT_DIR / "README.md").write_text("\n".join(lines))
+    (EXPORT_DIR / "README.md").write_text("\n".join(lines), encoding="utf-8")
     print(f"  README.md         : ulanish yo'riqnomasi yozildi")
 
 
